@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 )
 
 func main() {
@@ -39,7 +41,28 @@ func main() {
 				c.Write([]byte("Time cannot be parsed"))
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeReq)*time.Minute)
-			cmd := exec.Command("bash")
+			cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+			if err != nil {
+				panic(err)
+			}
+			resp, err := cli.ContainerCreate(ctx, &container.Config{
+				Image: "ubuntu",
+				Cmd:   []string{"sleep", "infinity"},
+			}, nil, nil, nil, "")
+
+			if err != nil {
+				panic(err)
+			}
+
+			if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+				panic(err)
+			}
+
+			cmd := exec.Command(
+				"docker", "exec", "-it",
+				resp.ID,
+				"bash",
+			)
 			ptmx, err := pty.Start(cmd)
 			if err != nil {
 				fmt.Println(err)
@@ -47,7 +70,9 @@ func main() {
 			go func() {
 				<-ctx.Done()
 				cancel()
-				c.Write([]byte("Session ended goodbye"))
+				cli.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
+				ptmx.Close()
+				c.Write([]byte("Session ended goodbye\n"))
 				cmd.Process.Kill()
 				c.Close()
 			}()
